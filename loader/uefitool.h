@@ -5,6 +5,7 @@
 
 #include <fstream>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -130,6 +131,7 @@ private:
     return fileTypeToUString(model.subtype(index.parent())).toLocal8Bit();
   }
 
+  std::set<std::string> seen_guids;
   qstring output_dir;
 };
 

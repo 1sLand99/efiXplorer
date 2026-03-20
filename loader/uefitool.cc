@@ -285,8 +285,6 @@ void efiloader::Uefitool::process_section(const UModelIndex &index,
     file->module_name.swap(name);
     file->module_guid.swap(guid);
   }
-
-  extract_files(index);
 }
 
 void efiloader::Uefitool::extract_files(const UModelIndex &index) {
@@ -296,18 +294,19 @@ void efiloader::Uefitool::extract_files(const UModelIndex &index) {
       process_section(index.child(i, 0), i, file.get());
     }
 
-    // append file
-    if (file->is_ok()) {
+    // skip duplicate GUIDs and consider them to be the same module
+    if (file->is_ok() && seen_guids.insert(file->module_guid.c_str()).second) {
       all_modules[file->module_guid.c_str()] = {
           {"name", file->module_name.c_str()},
           {"kind", file->module_kind.c_str()}};
       file->write(output_dir);
       files.push_back(std::move(file));
     }
-  } else {
-    for (int i = 0; i < model.rowCount(index); i++) {
-      extract_files(index.child(i, 0));
-    }
+  }
+
+  // recurse into children to find nested files (e.g. inner firmware volumes)
+  for (int i = 0; i < model.rowCount(index); i++) {
+    extract_files(index.child(i, 0));
   }
 }
 

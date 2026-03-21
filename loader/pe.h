@@ -24,8 +24,7 @@ public:
       : _image_name(fname.substr(fname.find_last_of("/\\") + 1)), pe_base(base),
         pe_sel_base(sel_base), li(i_li), _sec_off(0), _sec_ea(0), _sel(0),
         _ord(ord) {
-    cm_t cm = inf_get_cc_cm() & ~CM_MASK;
-    inf_set_cc_cm(cm | CM_N64);
+    // compiler model is set after good() determines _bits
     if (default_compiler() == COMP_UNK) {
       set_compiler_id(COMP_MS);
     }
@@ -39,6 +38,7 @@ public:
 
   [[nodiscard]] bool is_reloc_dir(uint32_t i) const { return i == 5; }
   [[nodiscard]] bool is_debug_dir(uint32_t i) const { return i == 6; }
+  [[nodiscard]] uint16_t bits() const { return _bits; }
 
   bool is_p32();
   bool is_p32_plus();

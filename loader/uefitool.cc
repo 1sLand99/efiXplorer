@@ -44,7 +44,7 @@ void efiloader::Uefitool::get_image_guid(qstring &image_guid,
 std::vector<std::string>
 efiloader::Uefitool::parse_depex_section_body(const UModelIndex &index,
                                               UString &parsed) {
-  // Adopted from FfsParser::parseDepexSectionBody
+  // adopted from FfsParser::parseDepexSectionBody
   std::vector<std::string> res;
 
   if (!index.isValid())

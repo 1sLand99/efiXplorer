@@ -4,14 +4,20 @@
 #include "../ldr/idaldr.h"
 
 #include <algorithm>
+#include <cstring>
+#include <filesystem>
+#include <string>
 
 #include "pe_manager.h"
 #include "uefitool.h"
 
+static constexpr char FMT_UEFI_64[] = "UEFI firmware image (load 64-bit)";
+static constexpr char FMT_UEFI_32_PEI[] =
+    "UEFI firmware image (load 32-bit PEI)";
+
 //--------------------------------------------------------------------------
-// IDA loader
-static int idaapi accept_file(qstring *fileformatname, qstring * /*processor*/,
-                              linput_t *li, const char * /*filename*/) {
+// detect UEFI firmware by searching for the "_FVH" signature
+static bool is_uefi_firmware(linput_t *li) {
   constexpr char sig[] = "_FVH";
   constexpr size_t sig_len = 4;
   static constexpr size_t kBufSize = 4096;
@@ -28,19 +34,43 @@ static int idaapi accept_file(qstring *fileformatname, qstring * /*processor*/,
       break;
     }
     if (std::search(buf, buf + nread, sig, sig + sig_len) != buf + nread) {
-      *fileformatname = "UEFI firmware image";
-      return 1;
+      return true;
     }
     if (to_read < static_cast<int64>(kBufSize)) {
       break;
     }
     pos += nread - (sig_len - 1);
   }
-  return 0;
+  return false;
+}
+
+//--------------------------------------------------------------------------
+// IDA loader: accept_file is called repeatedly when ACCEPT_CONTINUE is set
+static int idaapi accept_file(qstring *fileformatname, qstring * /*processor*/,
+                              linput_t *li, const char * /*filename*/) {
+  static int order = 0;
+
+  if (!is_uefi_firmware(li)) {
+    order = 0;
+    return 0;
+  }
+
+  switch (order++) {
+  case 0:
+    *fileformatname = FMT_UEFI_64;
+    return 1 | ACCEPT_CONTINUE;
+  case 1:
+    *fileformatname = FMT_UEFI_32_PEI;
+    order = 0;
+    return 1;
+  default:
+    order = 0;
+    return 0;
+  }
 }
 
 void idaapi load_file(linput_t *li, ushort /*neflag*/,
-                      const char * /*fileformatname*/) {
+                      const char *fileformatname) {
   int64 fsize = qlsize(li);
   if (fsize <= 0) {
     msg("[efiXloader] invalid input file size\n");
@@ -61,20 +91,38 @@ void idaapi load_file(linput_t *li, ushort /*neflag*/,
   uefi_parser.dump();
   uefi_parser.dump_jsons();
 
-  efiloader::PeManager pe_manager(uefi_parser.machine_type);
-
-  // we currently only handle 64-bit binaries with the EFI loader
-  add_til("uefi64.til", ADDTIL_DEFAULT);
-
   if (uefi_parser.files.empty()) {
     msg("[efiXloader] can not parse input firmware\n");
     return;
   }
 
+  bool load_32bit_pei =
+      fileformatname != nullptr && strcmp(fileformatname, FMT_UEFI_32_PEI) == 0;
+
+  // rename the IDB to include a bitness suffix (e.g., firmware.32.i64)
+  {
+    std::filesystem::path idb_path(get_path(PATH_TYPE_IDB));
+    auto ext = idb_path.extension(); // ".i64"
+    auto stem = idb_path.stem();     // "firmware"
+    auto parent = idb_path.parent_path();
+    std::string new_stem = stem.string() + (load_32bit_pei ? ".32" : ".64");
+    auto new_path = parent / (new_stem + ext.string());
+    set_path(PATH_TYPE_IDB, new_path.string().c_str());
+  }
+
+  if (load_32bit_pei) {
+    add_til("uefi.til", ADDTIL_DEFAULT);
+  } else {
+    add_til("uefi64.til", ADDTIL_DEFAULT);
+  }
+
+  efiloader::PeManager pe_manager(uefi_parser.machine_type, load_32bit_pei);
+
   int processed = 0;
   for (size_t i = 0; i < uefi_parser.files.size(); i++) {
     const auto &file = uefi_parser.files[i];
-    if (file->is_te) {
+    if (!load_32bit_pei && file->is_te) {
+      // 64-bit mode: skip TE files (original behaviour)
       continue;
     }
     auto inf = open_linput(file->dump_name.c_str(), false);
@@ -82,7 +130,13 @@ void idaapi load_file(linput_t *li, ushort /*neflag*/,
       msg("[efiXloader] unable to open file %s\n", file->dump_name.c_str());
       continue;
     }
-    if (pe_manager.process(inf, file->dump_name.c_str(), i)) {
+    bool ok = false;
+    if (file->is_te) {
+      ok = pe_manager.process_te(inf, file->dump_name.c_str(), i);
+    } else if (file->is_pe) {
+      ok = pe_manager.process(inf, file->dump_name.c_str(), i);
+    }
+    if (ok) {
       processed++;
     }
   }

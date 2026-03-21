@@ -28,7 +28,6 @@ constexpr const char *DIRECTORIES[] = {
 
 //--------------------------------------------------------------------------
 // efiloader core routines
-
 qoff64_t efiloader::PE::head_start() {
   qlseek(li, 0x3c);
   qoff64_t off = readshort(li);
@@ -38,7 +37,6 @@ qoff64_t efiloader::PE::head_start() {
 
 //--------------------------------------------------------------------------
 // PE feature extraction
-
 bool efiloader::PE::good() {
   uint16_t mz = 0;
   qlread(li, &mz, sizeof(uint16_t));
@@ -81,6 +79,8 @@ bool efiloader::PE::is_pe() {
 }
 
 bool efiloader::PE::process() {
+  cm_t cm = inf_get_cc_cm() & ~CM_MASK;
+  inf_set_cc_cm(cm | ((_bits == 64) ? CM_N64 : CM_N32_F48));
   preprocess();
   *pe_base = image_base + image_size;
   return true;
@@ -88,7 +88,6 @@ bool efiloader::PE::process() {
 
 //--------------------------------------------------------------------------
 // entry point processing
-
 void efiloader::PE::make_entry(ea_t ea) {
   char func_name[MAXNAMESIZE] = {0};
   ea_t new_ea = image_base + ea;
@@ -99,11 +98,10 @@ void efiloader::PE::make_entry(ea_t ea) {
 
 //--------------------------------------------------------------------------
 // segment creation
-
 segment_t *efiloader::PE::make_head_segment(ea_t start, ea_t end,
                                             const char *section_name) {
   segment_t *seg = new segment_t;
-  seg->bitness = 2;
+  seg->bitness = (_bits == 64) ? 2 : 1;
   seg->perm = SEG_DATA;
   seg->sel = allocate_selector(0x0);
   seg->start_ea = start;
@@ -119,7 +117,7 @@ segment_t *efiloader::PE::make_generic_segment(ea_t seg_ea, ea_t seg_ea_end,
   generic_segm->sel = allocate_selector(0x0);
   generic_segm->start_ea = seg_ea;
   generic_segm->end_ea = seg_ea_end;
-  generic_segm->bitness = 2;
+  generic_segm->bitness = (_bits == 64) ? 2 : 1;
   generic_segm->perm = SEGPERM_READ;
   if (flags & PEST_EXEC)
     generic_segm->perm |= SEGPERM_EXEC;
@@ -225,7 +223,6 @@ ea_t efiloader::PE::process_section_entry(ea_t next_ea) {
 
 //--------------------------------------------------------------------------
 // PE core processing
-
 void efiloader::PE::preprocess() {
   char seg_header_name[MAXNAMESIZE] = {0};
   ea_t next_ea = 0;
@@ -258,7 +255,8 @@ void efiloader::PE::preprocess() {
   create_word_with(ea + 20, "Initial IP value");
   create_word_with(ea + 22, "Initial (relative) CS value");
   create_word_with(ea + 24, "File address of relocation table");
-  op_offset(ea + 24, 0, REF_OFF64, BADADDR, image_base);
+  op_offset(ea + 24, 0, (_bits == 64) ? REF_OFF64 : REF_OFF32, BADADDR,
+            image_base);
   create_word_with(ea + 26, "Overlay number");
   create_word(ea + 28, 8);
   set_cmt(ea + 28, "Reserved words", 0);
@@ -314,7 +312,7 @@ void efiloader::PE::preprocess() {
   create_dword_with(next_ea, "Address of entry point");
   make_entry(get_dword(next_ea));
   refinfo_t ri;
-  ri.init(REF_OFF64, image_base);
+  ri.init((_bits == 64) ? REF_OFF64 : REF_OFF32, image_base);
   if (is_loaded(next_ea) && get_dword(next_ea)) {
     op_offset_ex(next_ea, 0, &ri);
   }
@@ -324,12 +322,29 @@ void efiloader::PE::preprocess() {
     op_offset_ex(next_ea, 0, &ri);
   }
   next_ea += 4;
-  default_image_base = get_qword(next_ea);
-  create_qword(next_ea, 8);
-  set_cmt(next_ea, "Image base", 0);
-  op_hex(next_ea, 0);
-  op_plain_offset(next_ea, 0, *pe_base);
-  next_ea += 8;
+  if (_bits == 32) {
+    // PE32: Base of data field (not present in PE32+)
+    create_dword_with(next_ea, "Base of data");
+    if (is_loaded(next_ea) && get_dword(next_ea)) {
+      op_offset_ex(next_ea, 0, &ri);
+    }
+    next_ea += 4;
+    // PE32: Image base is DWORD
+    default_image_base = get_dword(next_ea);
+    create_dword(next_ea, 4);
+    set_cmt(next_ea, "Image base", 0);
+    op_hex(next_ea, 0);
+    op_plain_offset(next_ea, 0, *pe_base);
+    next_ea += 4;
+  } else {
+    // PE32+: Image base is QWORD
+    default_image_base = get_qword(next_ea);
+    create_qword(next_ea, 8);
+    set_cmt(next_ea, "Image base", 0);
+    op_hex(next_ea, 0);
+    op_plain_offset(next_ea, 0, *pe_base);
+    next_ea += 8;
+  }
   next_ea = create_dword_with(next_ea, "Section alignment");
   next_ea = create_dword_with(next_ea, "File alignment");
   next_ea = create_word_with(next_ea, "Major operating system version");
@@ -346,10 +361,19 @@ void efiloader::PE::preprocess() {
   next_ea = create_dword_with(next_ea, "Checksum");
   next_ea = create_word_with(next_ea, "Subsystem");
   next_ea = create_word_with(next_ea, "Dll characteristics");
-  next_ea = create_qword_with(next_ea, "Size of stack reserve");
-  next_ea = create_qword_with(next_ea, "Size of stack commit");
-  next_ea = create_qword_with(next_ea, "Size of heap reserve");
-  next_ea = create_qword_with(next_ea, "Size of heap commit");
+  if (_bits == 32) {
+    // PE32: stack/heap sizes are DWORDs
+    next_ea = create_dword_with(next_ea, "Size of stack reserve");
+    next_ea = create_dword_with(next_ea, "Size of stack commit");
+    next_ea = create_dword_with(next_ea, "Size of heap reserve");
+    next_ea = create_dword_with(next_ea, "Size of heap commit");
+  } else {
+    // PE32+: stack/heap sizes are QWORDs
+    next_ea = create_qword_with(next_ea, "Size of stack reserve");
+    next_ea = create_qword_with(next_ea, "Size of stack commit");
+    next_ea = create_qword_with(next_ea, "Size of heap reserve");
+    next_ea = create_qword_with(next_ea, "Size of heap commit");
+  }
   next_ea = create_dword_with(next_ea, "Loader flag");
   create_dword_with(next_ea, "Number of data directories");
   if (!is_loaded(next_ea)) {

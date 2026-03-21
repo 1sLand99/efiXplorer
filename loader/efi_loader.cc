@@ -84,6 +84,21 @@ void idaapi load_file(linput_t *li, ushort /*neflag*/,
     return;
   }
 
+  bool load_32bit_pei =
+      fileformatname != nullptr && strcmp(fileformatname, FMT_UEFI_32_PEI) == 0;
+
+  // rename the IDB for 32-bit mode to avoid collision with default 64-bit IDB
+  // must happen before dump() so .efiloader dir and JSON paths are consistent
+  if (load_32bit_pei) {
+    std::filesystem::path idb_path(get_path(PATH_TYPE_IDB));
+    auto ext = idb_path.extension(); // ".i64"
+    auto stem = idb_path.stem();
+    auto parent = idb_path.parent_path();
+    std::string new_stem = stem.string() + ".32";
+    auto new_path = parent / (new_stem + ext.string());
+    set_path(PATH_TYPE_IDB, new_path.string().c_str());
+  }
+
   efiloader::Uefitool uefi_parser(data);
   if (uefi_parser.messages_occurs()) {
     uefi_parser.show_messages();
@@ -94,20 +109,6 @@ void idaapi load_file(linput_t *li, ushort /*neflag*/,
   if (uefi_parser.files.empty()) {
     msg("[efiXloader] can not parse input firmware\n");
     return;
-  }
-
-  bool load_32bit_pei =
-      fileformatname != nullptr && strcmp(fileformatname, FMT_UEFI_32_PEI) == 0;
-
-  // rename the IDB to include a bitness suffix (e.g., firmware.32.i64)
-  {
-    std::filesystem::path idb_path(get_path(PATH_TYPE_IDB));
-    auto ext = idb_path.extension(); // ".i64"
-    auto stem = idb_path.stem();     // "firmware"
-    auto parent = idb_path.parent_path();
-    std::string new_stem = stem.string() + (load_32bit_pei ? ".32" : ".64");
-    auto new_path = parent / (new_stem + ext.string());
-    set_path(PATH_TYPE_IDB, new_path.string().c_str());
   }
 
   if (load_32bit_pei) {

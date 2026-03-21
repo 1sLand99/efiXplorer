@@ -311,8 +311,10 @@ void efiloader::Uefitool::extract_files(const UModelIndex &index) {
 }
 
 void efiloader::Uefitool::dump() {
-  qstring idb_path(get_path(PATH_TYPE_IDB));
-  output_dir = idb_path + qstring(".efiloader");
+  // use the original input file path so both 32-bit and 64-bit
+  // sessions share the same dump directory (e.g., fw.bin.efiloader)
+  qstring input_path(get_path(PATH_TYPE_CMD));
+  output_dir = input_path + qstring(".efiloader");
   std::filesystem::create_directory(output_dir.c_str());
   extract_files(model.index(0, 0));
 }

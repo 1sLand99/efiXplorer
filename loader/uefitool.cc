@@ -349,13 +349,11 @@ void efiloader::Uefitool::dump_jsons() {
   // dump JSON with DEPEX and GUIDs information for each image
   // use the original input file path (not the bitness-specific IDB path)
   // so both 32-bit and 64-bit sessions share the same JSON files
-  std::filesystem::path out;
-  out /= get_path(PATH_TYPE_CMD);
-  out.replace_extension(".deps.json");
-  std::ofstream out_deps(out);
+  qstring input_path(get_path(PATH_TYPE_CMD));
+
+  std::ofstream out_deps((input_path + ".deps.json").c_str());
   out_deps << std::setw(2) << all_deps << std::endl;
 
-  out.replace_extension("").replace_extension(".images.json");
-  std::ofstream out_guids(out);
+  std::ofstream out_guids((input_path + ".images.json").c_str());
   out_guids << std::setw(2) << all_modules << std::endl;
 }

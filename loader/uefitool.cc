@@ -347,8 +347,10 @@ void efiloader::Uefitool::get_apriori(const UModelIndex &index,
 
 void efiloader::Uefitool::dump_jsons() {
   // dump JSON with DEPEX and GUIDs information for each image
+  // use the original input file path (not the bitness-specific IDB path)
+  // so both 32-bit and 64-bit sessions share the same JSON files
   std::filesystem::path out;
-  out /= get_path(PATH_TYPE_IDB);
+  out /= get_path(PATH_TYPE_CMD);
   out.replace_extension(".deps.json");
   std::ofstream out_deps(out);
   out_deps << std::setw(2) << all_deps << std::endl;

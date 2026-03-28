@@ -11,9 +11,9 @@
 #include "pe_manager.h"
 #include "uefitool.h"
 
-static constexpr char FMT_UEFI_64[] = "UEFI firmware image (load 64-bit)";
+static constexpr char FMT_UEFI_64[] = "UEFI firmware image (64-bit modules)";
 static constexpr char FMT_UEFI_32_PEI[] =
-    "UEFI firmware image (load 32-bit PEI)";
+    "UEFI firmware image (32-bit PEI modules)";
 
 //--------------------------------------------------------------------------
 // detect UEFI firmware by searching for the "_FVH" signature
@@ -87,17 +87,18 @@ void idaapi load_file(linput_t *li, ushort /*neflag*/,
   bool load_32bit_pei =
       fileformatname != nullptr && strcmp(fileformatname, FMT_UEFI_32_PEI) == 0;
 
-  // rename the IDB for 32-bit mode to avoid collision with default 64-bit IDB
-  // must happen before dump() so .efiloader dir and JSON paths are consistent
-  if (load_32bit_pei) {
-    std::filesystem::path idb_path(get_path(PATH_TYPE_IDB));
-    auto ext = idb_path.extension(); // ".i64"
-    auto stem = idb_path.stem();
-    auto parent = idb_path.parent_path();
-    std::string new_stem = stem.string() + ".32";
-    auto new_path = parent / (new_stem + ext.string());
-    set_path(PATH_TYPE_IDB, new_path.string().c_str());
-  }
+  // rename the IDB to include bitness suffix so that 32-bit and 64-bit
+  // sessions produce distinct database files (e.g. fw.32.i64 / fw.64.i64)
+  //
+  // IDA has already created the initial .i64 under the original
+  // name by the time load_file() runs; set_path only redirects future saves
+  std::filesystem::path idb_path(get_path(PATH_TYPE_IDB));
+  auto ext = idb_path.extension(); // ".i64"
+  auto stem = idb_path.stem();
+  auto parent = idb_path.parent_path();
+  std::string new_stem = stem.string() + (load_32bit_pei ? ".32" : ".64");
+  auto new_path = parent / (new_stem + ext.string());
+  set_path(PATH_TYPE_IDB, new_path.string().c_str());
 
   efiloader::Uefitool uefi_parser(data);
   if (uefi_parser.messages_occurs()) {
@@ -143,8 +144,7 @@ void idaapi load_file(linput_t *li, ushort /*neflag*/,
   }
 
   if (processed == 0) {
-    msg("[efiXloader] no images were loaded\n");
-    return;
+    loader_failure("[efiXloader] no images were loaded");
   }
 
   plugin_t *findpat = find_plugin("patfind", true);

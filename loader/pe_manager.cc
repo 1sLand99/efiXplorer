@@ -8,7 +8,7 @@
 bool efiloader::PeManager::process(linput_t *li, const std::string &fname,
                                    int ord) {
   // 32-bit modules and modules in the TE format will not be loaded
-  efiloader::PE pe(li, fname, &pe_base, &pe_sel_base, ord, machine_type);
+  efiloader::PE pe(li, fname, &pe_base, &pe_sel_base, ord);
   if (!pe.good()) {
     msg("[efiXloader] %s is not loaded (invalid PE)\n", fname.c_str());
     return false;

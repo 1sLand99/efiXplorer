@@ -3,54 +3,41 @@
 
 #include "pe.h"
 
-#include <pro.h>
-
 #include <cinttypes>
-#include <map>
 
-#include <bytes.hpp>
-#include <fixup.hpp>
-#include <idp.hpp>
-#include <segregs.hpp>
+constexpr int DIRECTORIES_MAX_ID = 15;
 
-#define DEBUG
-
-#define DIRECTORIES_MAX_ID 15
-
-std::map<uint32_t, const char *> DIRECTORIES = {
-    {0, "Export Directory"},
-    {1, "Import Directory"},
-    {2, "Resource Directory"},
-    {3, "Exception Directory"},
-    {4, "Security Directory"},
-    {5, "Base Relocation Table"},
-    {6, "Debug Directory"},
-    {7, "Architecture Specific Data"},
-    {8, "RVA of GP"},
-    {9, "TLS Directory"},
-    {10, "Load Configuration Directory"},
-    {11, "Bound Import Directory in headers"},
-    {12, "Import Address Table"},
-    {13, "Delay Load Import Descriptors"},
-    {14, "COM Runtime descriptor"},
-    {15, "Image data directory"},
+constexpr const char *DIRECTORIES[] = {
+    "Export Directory",
+    "Import Directory",
+    "Resource Directory",
+    "Exception Directory",
+    "Security Directory",
+    "Base Relocation Table",
+    "Debug Directory",
+    "Architecture Specific Data",
+    "RVA of GP",
+    "TLS Directory",
+    "Load Configuration Directory",
+    "Bound Import Directory in headers",
+    "Import Address Table",
+    "Delay Load Import Descriptors",
+    "COM Runtime descriptor",
+    "Image data directory",
 };
 
-//
-// efiLoader core routines
-//
+//--------------------------------------------------------------------------
+// efiloader core routines
 
 qoff64_t efiloader::PE::head_start() {
-  qoff64_t off = 0;
   qlseek(li, 0x3c);
-  off = readshort(li);
+  qoff64_t off = readshort(li);
   reset();
   return off;
 }
 
-//
-// Functions to extract PE features
-//
+//--------------------------------------------------------------------------
+// PE feature extraction
 
 bool efiloader::PE::good() {
   uint16_t mz = 0;
@@ -93,97 +80,14 @@ bool efiloader::PE::is_pe() {
   return pe_sign == PE_SIGN;
 }
 
-uint16_t efiloader::PE::arch() {
-  qlseek(li, head_off + sizeof(uint32_t));
-  qlread(li, &pe, sizeof(peheader_t));
-  return pe.machine;
-}
-
 bool efiloader::PE::process() {
   preprocess();
   *pe_base = image_base + image_size;
   return true;
 }
 
-const char *efiloader::PE::_machine_name() {
-  switch (pe64.machine) {
-  case PECPU_80386:
-    return "80386";
-  case PECPU_80486:
-    return "80486";
-  case PECPU_80586:
-    return "80586";
-  case PECPU_SH3:
-    return "SH3";
-  case PECPU_SH3DSP:
-    return "SH3DSP";
-  case PECPU_SH3E:
-    return "SH3E";
-  case PECPU_SH4:
-    return "SH4";
-  case PECPU_SH5:
-    return "SH5";
-  case PECPU_ARM:
-    return "ARM";
-  case PECPU_ARMI:
-    return "ARMI";
-  case PECPU_ARMV7:
-    return "ARMv7";
-  case PECPU_EPOC:
-    return "ARM EPOC";
-  case PECPU_PPC:
-    return "PPC";
-  case PECPU_PPCFP:
-    return "PPC FP";
-  case PECPU_PPCBE:
-    return "PPC BE";
-  case PECPU_IA64:
-    return "IA64";
-  case PECPU_R3000:
-    return "MIPS R3000";
-  case PECPU_R4000:
-    return "MIPS R4000";
-  case PECPU_R6000:
-    return "MIPS R6000";
-  case PECPU_R10000:
-    return "MIPS R10000";
-  case PECPU_MIPS16:
-    return "MIPS16";
-  case PECPU_WCEMIPSV2:
-    return "MIPS WCEv2";
-  case PECPU_ALPHA:
-    return "ALPHA";
-  case PECPU_ALPHA64:
-    return "ALPHA 64";
-  case PECPU_AMD64:
-    return "AMD64";
-  case PECPU_ARM64:
-    return "ARM64";
-  case PECPU_M68K:
-    return "M68K";
-  case PECPU_MIPSFPU:
-    return "MIPS FPU";
-  case PECPU_MIPSFPU16:
-    return "MIPS16 FPU";
-  case PECPU_EBC:
-    return "EFI Bytecode";
-  case PECPU_AM33:
-    return "AM33";
-  case PECPU_M32R:
-    return "M32R";
-  case PECPU_CEF:
-    return "CEF";
-  case PECPU_CEE:
-    return "CEE";
-  case PECPU_TRICORE:
-    return "TRICORE";
-  }
-  return NULL;
-}
-
-//
-// Functions processing
-//
+//--------------------------------------------------------------------------
+// entry point processing
 
 void efiloader::PE::make_entry(ea_t ea) {
   char func_name[MAXNAMESIZE] = {0};
@@ -191,49 +95,10 @@ void efiloader::PE::make_entry(ea_t ea) {
   qsnprintf(func_name, sizeof(func_name), "%s_entry_%08X", _image_name.c_str(),
             calc_file_crc32(li));
   add_entry(new_ea, new_ea, func_name, true);
-  memset(func_name, 0, sizeof(func_name));
 }
 
-//
-// PE image pre-processing
-//
-
-inline size_t efiloader::PE::make_named_word(ea_t ea, const char *name,
-                                             const char *extra, size_t count) {
-  if (extra) {
-    add_extra_cmt(ea, true, "%s", extra);
-  }
-  create_word(ea, 2 * count);
-  set_cmt(ea, name, 0);
-  op_hex(ea, 0);
-  return 2 * count;
-}
-
-inline size_t efiloader::PE::make_named_dword(ea_t ea, const char *name,
-                                              const char *extra, size_t count) {
-  if (extra) {
-    add_extra_cmt(ea, true, "%s", extra);
-  }
-  create_word(ea, 4 * count);
-  set_cmt(ea, name, 0);
-  op_hex(ea, 0);
-  return 4 * count;
-}
-
-inline size_t efiloader::PE::make_named_qword(ea_t ea, const char *name,
-                                              const char *extra, size_t count) {
-  if (extra) {
-    add_extra_cmt(ea, true, "%s", extra);
-  }
-  create_word(ea, 8 * count);
-  set_cmt(ea, name, 0);
-  op_hex(ea, 0);
-  return 8 * count;
-}
-
-//
-// Segments processing
-//
+//--------------------------------------------------------------------------
+// segment creation
 
 segment_t *efiloader::PE::make_head_segment(ea_t start, ea_t end,
                                             const char *section_name) {
@@ -275,14 +140,6 @@ segment_t *efiloader::PE::make_generic_segment(ea_t seg_ea, ea_t seg_ea_end,
     add_segm_ex(generic_segm, name.c_str(), "DATA", ADDSEG_NOAA);
   }
 
-  if (name == ".text") {
-    code_segm_name.insert(name);
-  } else if (name == ".data") {
-    data_segm_name.insert(name);
-    data_segment_sel = get_segm_by_name(data_segm_name.c_str())->sel;
-  }
-
-  secs_names.push_back(name);
   return generic_segm;
 }
 
@@ -366,33 +223,17 @@ ea_t efiloader::PE::process_section_entry(ea_t next_ea) {
   return next_ea;
 }
 
-void efiloader::PE::setup_ds_selector() {
-  for (; !secs_names.empty(); secs_names.pop_back()) {
-    segment_t *seg =
-        get_segm_by_name(secs_names[secs_names.size() - 1].c_str());
-    set_default_sreg_value(seg, str2reg("DS"), data_segment_sel);
-  }
-}
-
-//
+//--------------------------------------------------------------------------
 // PE core processing
-//
 
 void efiloader::PE::preprocess() {
-  char seg_name[MAXNAMESIZE] = {0};
   char seg_header_name[MAXNAMESIZE] = {0};
-  char image_base_name[MAXNAMESIZE] = {0};
-  char section_name[MAXNAMESIZE] = {0};
   ea_t next_ea = 0;
   ea_t ea = align_up(*pe_base, PAGE_SIZE);
   image_base = ea;
   ea_t start = ea;
   ea_t end = ea + qlsize(li);
-  qsnprintf(seg_name, sizeof(seg_name), "%s_%08X", _image_name.c_str(),
-            calc_file_crc32(li));
   qsnprintf(seg_header_name, sizeof(seg_header_name), "%s_HEADER",
-            _image_name.c_str());
-  qsnprintf(image_base_name, sizeof(image_base_name), "%s_IMAGE_BASE",
             _image_name.c_str());
 
   if (preprocess_sections() == -1) {
@@ -404,7 +245,6 @@ void efiloader::PE::preprocess() {
   push_to_idb(start, end);
   segments.push_back(make_head_segment(image_base, image_base + headers_size,
                                        seg_header_name));
-  secs_names.push_back(qstring(seg_header_name));
   create_word_with(ea, "PE magic number");
   create_word_with(ea + 2, "Bytes on last page of file");
   create_word_with(ea + 4, "Pages in file");
@@ -512,12 +352,15 @@ void efiloader::PE::preprocess() {
   next_ea = create_qword_with(next_ea, "Size of heap commit");
   next_ea = create_dword_with(next_ea, "Loader flag");
   create_dword_with(next_ea, "Number of data directories");
-  while (!is_loaded(next_ea)) {
-    continue;
+  if (!is_loaded(next_ea)) {
+    msg("[efiXloader] warning: data directory count not mapped\n");
+    number_of_dirs = 0;
+  } else {
+    number_of_dirs = get_dword(next_ea);
+    if (number_of_dirs > DIRECTORIES_MAX_ID + 1) {
+      number_of_dirs = DIRECTORIES_MAX_ID + 1;
+    }
   }
-  number_of_dirs = get_dword(next_ea);
-  uint32_t va = 0;
-  uint32_t size = 0;
   next_ea += 4;
   for (int i = 0; i < number_of_dirs; i++) {
     if (is_reloc_dir(i)) {
@@ -529,7 +372,7 @@ void efiloader::PE::preprocess() {
         ea_t delta = image_base - default_image_base;
         ea_t block_addr = get_dword(relocs_va);
         ea_t block_size = get_dword(relocs_va + 4);
-        while (block_size && relocs_va < relocs_va_end) {
+        while (block_size >= 8 && relocs_va < relocs_va_end) {
           ea_t block_base = image_base + block_addr;
           int block_reloc_count = (block_size - 8) / 2;
 
@@ -541,11 +384,11 @@ void efiloader::PE::preprocess() {
             if (type == PER_DIR64)
               add_qword(block_base + offset, delta);
             else if (type == PER_HIGHLOW)
-              add_dword(block_base + offset, (uint32_t)delta);
+              add_dword(block_base + offset, static_cast<uint32_t>(delta));
             else if (type == PER_HIGH)
-              add_word(block_base + offset, (uint16_t)(delta >> 16));
+              add_word(block_base + offset, static_cast<uint16_t>(delta >> 16));
             else if (type == PER_LOW)
-              add_word(block_base + offset, (uint16_t)delta);
+              add_word(block_base + offset, static_cast<uint16_t>(delta));
             block_ptr += 2;
           }
           relocs_va += block_size;
@@ -572,10 +415,6 @@ void efiloader::PE::preprocess() {
   del_items(next_ea, DELIT_EXPAND | DELIT_DELNAMES, 0x28 * number_of_sections);
   for (int i = 0; i < number_of_sections; i++) {
     next_ea = process_section_entry(next_ea);
-    memset(seg_name, 0, sizeof(seg_name));
-    memset(seg_header_name, 0, sizeof(seg_name));
-    memset(image_base_name, 0, sizeof(seg_name));
-    memset(section_name, 0, sizeof(seg_name));
   }
 }
 

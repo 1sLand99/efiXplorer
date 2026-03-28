@@ -1,118 +1,79 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2020-2026 Binarly
 
-#include "efi_loader.h"
+#include "../ldr/idaldr.h"
 
-#include <string>
+#include <algorithm>
 
+#include "pe_manager.h"
 #include "uefitool.h"
-#include "utils.h"
 
-#define USE_UEFITOOL_PARSER
-
-//------------------------
-// IDA wrappers
-//------------------------
-
-void idaapi load_binary(const char *fname) {
-  static bool first_uefi_image = true;
-
-  load_info_t *ld = nullptr;
-  linput_t *li = nullptr;
-  ushort nflags =
-      NEF_SEGS | NEF_RSCS | NEF_NAME | NEF_IMPS | NEF_LALL | NEF_FLAT;
-  if (first_uefi_image) {
-    nflags |= NEF_FIRST;
-    first_uefi_image = false;
-  }
-  // linput
-  li = open_linput(fname, false);
-  if (li == nullptr) {
-    error("failed to process input source: %s", fname);
-  }
-  // get loaders
-  ld = build_loaders_list(li, fname);
-  msg("[efiXloader] using %s to load %s\n", ld->dllname.c_str(), fname);
-  // load EFI binary into database
-  if ((load_nonbinary_file(fname, li, ".", nflags, ld))) {
-    msg("[efiXloader] successfully loaded %s\n", fname);
-  } else {
-    loader_failure("[efiXloader] 'load_nonbinary_file' failed");
-  }
-  close_linput(li);
-  free_loaders_list(ld);
-  return;
-}
-
-void idaapi wait(void) {
-  while (!auto_is_ok()) {
-    auto_wait();
-  }
-}
-
-//------------------------
-// IDA analysing
-//------------------------
-
-void inline idaapi reanalyse_all(void) {
-  plan_range(inf_get_min_ea(), inf_get_max_ea());
-  auto_wait();
-  auto_make_proc(inf_get_min_ea());
-}
-
-void efi_til_init(const char *til_name) {
-  qstring err;
-  til_t *res;
-  res = load_til(til_name, &err);
-  if (!res) {
-    loader_failure("failed to load %s", til_name);
-  } else {
-    msg("[efiXloader] lib %s is ready\n", til_name);
-  }
-}
-
-//------------------------
+//--------------------------------------------------------------------------
 // IDA loader
-//------------------------
+static int idaapi accept_file(qstring *fileformatname, qstring * /*processor*/,
+                              linput_t *li, const char * /*filename*/) {
+  constexpr char sig[] = "_FVH";
+  constexpr size_t sig_len = 4;
+  static constexpr size_t kBufSize = 4096;
 
-static int idaapi accept_file(qstring *fileformatname, qstring *processor,
-                              linput_t *li, const char *filename) {
-  efiloader::Utils utils;
-  bytevec_t data;
-  data.resize(qlsize(li));
+  const int64 file_size = qlsize(li);
   qlseek(li, 0);
-  qlread(li, data.begin(), qlsize(li));
-  *fileformatname = "UEFI firmware image";
-  return utils.find_vol_test(data) != std::string::npos;
+
+  char buf[kBufSize];
+  for (int64 pos = 0; pos + static_cast<int64>(sig_len) <= file_size;) {
+    qlseek(li, pos);
+    auto to_read = qmin(static_cast<int64>(kBufSize), file_size - pos);
+    auto nread = qlread(li, buf, static_cast<size_t>(to_read));
+    if (nread < static_cast<ssize_t>(sig_len)) {
+      break;
+    }
+    if (std::search(buf, buf + nread, sig, sig + sig_len) != buf + nread) {
+      *fileformatname = "UEFI firmware image";
+      return 1;
+    }
+    if (to_read < static_cast<int64>(kBufSize)) {
+      break;
+    }
+    pos += nread - (sig_len - 1);
+  }
+  return 0;
 }
 
-void idaapi load_file(linput_t *li, ushort neflag, const char *fileformatname) {
-  bool ok = true;
-  bool is_pe;
-  Ui ui;
-  bytevec_t data;
-  data.resize(qlsize(li));
-  qlread(li, data.begin(), qlsize(li));
-  efiloader::Uefitool uefiParser(data);
-  if (uefiParser.messages_occurs()) {
-    uefiParser.show_messages();
+void idaapi load_file(linput_t *li, ushort /*neflag*/,
+                      const char * /*fileformatname*/) {
+  int64 fsize = qlsize(li);
+  if (fsize <= 0) {
+    msg("[efiXloader] invalid input file size\n");
+    return;
   }
-  uefiParser.dump();
-  uefiParser.dump_jsons();
-  efiloader::PeManager peManager(uefiParser.machine_type);
+  bytevec_t data;
+  data.resize(fsize);
+  qlseek(li, 0);
+  if (qlread(li, data.begin(), fsize) != fsize) {
+    msg("[efiXloader] failed to read input file\n");
+    return;
+  }
 
-  // add_til("uefi.til", ADDTIL_DEFAULT);
+  efiloader::Uefitool uefi_parser(data);
+  if (uefi_parser.messages_occurs()) {
+    uefi_parser.show_messages();
+  }
+  uefi_parser.dump();
+  uefi_parser.dump_jsons();
+
+  efiloader::PeManager pe_manager(uefi_parser.machine_type);
+
   // we currently only handle 64-bit binaries with the EFI loader
   add_til("uefi64.til", ADDTIL_DEFAULT);
 
-  if (uefiParser.files.empty()) {
+  if (uefi_parser.files.empty()) {
     msg("[efiXloader] can not parse input firmware\n");
     return;
   }
 
   int processed = 0;
-  for (size_t i = 0; i < uefiParser.files.size(); i++) {
-    const auto &file = uefiParser.files[i];
+  for (size_t i = 0; i < uefi_parser.files.size(); i++) {
+    const auto &file = uefi_parser.files[i];
     if (file->is_te) {
       continue;
     }
@@ -121,10 +82,11 @@ void idaapi load_file(linput_t *li, ushort neflag, const char *fileformatname) {
       msg("[efiXloader] unable to open file %s\n", file->dump_name.c_str());
       continue;
     }
-    if (peManager.process(inf, file->dump_name.c_str(), i)) {
+    if (pe_manager.process(inf, file->dump_name.c_str(), i)) {
       processed++;
     }
   }
+
   if (processed == 0) {
     msg("[efiXloader] no images were loaded\n");
     return;
@@ -137,29 +99,8 @@ void idaapi load_file(linput_t *li, ushort neflag, const char *fileformatname) {
   }
 }
 
-static int idaapi move_segm(ea_t from, ea_t to, asize_t, const char *) {
-  return 1;
-}
-
-//----------------------------------------------------------------------
-//
-//      LOADER DESCRIPTION BLOCK
-//
-//----------------------------------------------------------------------
+//--------------------------------------------------------------------------
+// loader description block
 loader_t LDSC = {
-    IDP_INTERFACE_VERSION,
-    // loader flags
-    0,
-    // check input file format. if recognized, then return 1
-    // and fill 'fileformatname'.
-    // otherwise return 0
-    accept_file,
-    // load file into the database.
-    load_file,
-    // create output file from the database.
-    // this function may be absent.
-    nullptr,
-    // take care of a moved segment (fix up relocations, for example)
-    nullptr,
-    nullptr,
+    IDP_INTERFACE_VERSION, 0, accept_file, load_file, nullptr, nullptr, nullptr,
 };
